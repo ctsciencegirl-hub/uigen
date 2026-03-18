@@ -13,7 +13,16 @@ vi.mock("next/headers", () => ({
   cookies: vi.fn(() => Promise.resolve(mockCookieStore)),
 }));
 
-const { createSession } = await import("@/lib/auth");
+const { createSession, getSession } = await import("@/lib/auth");
+
+async function makeToken(payload: Record<string, unknown>, expiresIn = "7d") {
+  const { SignJWT } = await import("jose");
+  return new SignJWT(payload)
+    .setProtectedHeader({ alg: "HS256" })
+    .setExpirationTime(expiresIn)
+    .setIssuedAt()
+    .sign(JWT_SECRET);
+}
 
 const JWT_SECRET = new TextEncoder().encode("development-secret-key");
 
@@ -72,5 +81,40 @@ describe("createSession", () => {
 
     const header = JSON.parse(atob(capturedToken.split(".")[0]));
     expect(header.alg).toBe("HS256");
+  });
+});
+
+describe("getSession", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("returns null when no cookie is present", async () => {
+    mockCookieStore.get.mockReturnValue(undefined);
+    expect(await getSession()).toBeNull();
+  });
+
+  it("returns null for an invalid token", async () => {
+    mockCookieStore.get.mockReturnValue({ value: "not-a-jwt" });
+    expect(await getSession()).toBeNull();
+  });
+
+  it("returns null for an expired token", async () => {
+    const token = await makeToken({ userId: "u1", email: "a@b.com" }, "-1s");
+    mockCookieStore.get.mockReturnValue({ value: token });
+    expect(await getSession()).toBeNull();
+  });
+
+  it("returns session payload for a valid token", async () => {
+    const token = await makeToken({ userId: "u1", email: "a@b.com" });
+    mockCookieStore.get.mockReturnValue({ value: token });
+
+    const session = await getSession();
+    expect(session?.userId).toBe("u1");
+    expect(session?.email).toBe("a@b.com");
+  });
+
+  it("reads from the auth-token cookie", async () => {
+    mockCookieStore.get.mockReturnValue(undefined);
+    await getSession();
+    expect(mockCookieStore.get).toHaveBeenCalledWith("auth-token");
   });
 });
